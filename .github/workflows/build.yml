@@ -1,0 +1,58 @@
+name: Build WDA ipa
+
+on:
+  workflow_dispatch:
+    inputs:
+      wda_ref:
+        description: 'appium/WebDriverAgent ref (branch / tag / commit)'
+        required: false
+        default: 'master'
+  push:
+    branches: [main, master]
+    paths: ['.github/workflows/build.yml']
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps:
+      - name: Checkout WDA source
+        uses: actions/checkout@v4
+        with:
+          repository: appium/WebDriverAgent
+          ref: ${{ inputs.wda_ref || 'master' }}
+          fetch-depth: 1
+
+      - name: Select latest stable Xcode
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: latest-stable
+
+      - name: Show toolchain
+        run: |
+          xcodebuild -version
+          xcodebuild -showsdks | grep iphoneos || true
+
+      - name: Build WebDriverAgentRunner (unsigned, real device)
+        run: |
+          TARGET=runner DEST=generic SDK=device ACTION=build CODE_SIGN=no \
+            DERIVED_DATA_PATH="$PWD/build" ./Scripts/build.sh
+
+      - name: Package unsigned ipa
+        run: |
+          set -euo pipefail
+          APP_PATH=$(find "$PWD/build/Build/Products" -maxdepth 2 -type d -name '*.app' | head -n 1)
+          echo "Built app: $APP_PATH"
+          find "$APP_PATH" -type d -name '*.dSYM' -exec rm -rf {} +
+          rm -rf Payload && mkdir Payload
+          cp -R "$APP_PATH" Payload/
+          zip -qry WDA.ipa Payload
+          ls -lh WDA.ipa
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: WDA-ipa-${{ inputs.wda_ref || 'master' }}
+          path: WDA.ipa
+          retention-days: 30
+          if-no-files-found: error
